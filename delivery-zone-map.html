@@ -149,6 +149,17 @@
         </label>
       </div>
 
+      <div class="toggle-row">
+        <div>
+          <div class="label">행정동 경계선 표시</div>
+          <div class="desc" id="admdongDesc">지역 필터에서 지원 지역 선택 시 활성화</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="admdongToggle" disabled />
+          <span class="slider"></span>
+        </label>
+      </div>
+
       <div class="range-row">
         <label><span>권역 채우기 투명도</span><span id="opacityVal">40%</span></label>
         <input type="range" id="opacitySlider" min="0" max="100" value="40" />
@@ -174,9 +185,10 @@
 
     <div class="section" style="border-top:1px solid var(--panel-border); border-bottom:none;">
       <p class="legend-note">
-        <b>지적편집도</b>는 카카오맵 기본 레이어(용도지역 정보)이며, 실제 <b>행정동 경계선</b>은
-        카카오 JS SDK에 공개 API로 제공되지 않습니다. 필요하면 공공데이터포털/SGIS 등의
-        행정동 경계 GeoJSON을 받아 지금의 배달권역과 같은 방식(Polygon 테두리)으로 추가해야 합니다.
+        <b>지적편집도</b>는 카카오맵 기본 레이어(용도지역 정보)입니다.<br/><br/>
+        <b>행정동 경계선</b>은 통계청 데이터 기반 GeoJSON을 별도로 불러와 표시합니다.
+        현재는 <b>서울</b>만 지원하며, 지역 필터에서 서울을 선택하면 토글이 활성화됩니다.
+        다른 지역은 데이터 추가 후 지원 예정입니다.
       </p>
     </div>
   </aside>
@@ -214,6 +226,16 @@
 const KAKAO_JS_KEY = "9b4bddbadae09bdcf433079afe6487d0";
 const ZONES_JSON_URL = "./zones.json"; // zones.json을 html과 같은 폴더에 두세요
 
+/* 지역 필터(city_nm, 배달권역 엑셀 기준) -> 행정동 경계 파일(시/도 단위) 매핑
+   파일이 준비된 지역만 값이 채워져 있습니다. 다른 지역은 admdong_xxx.json을
+   추가하고 여기에 항목을 넣어주면 자동으로 지원됩니다. */
+const ADMDONG_FILE_MAP = {
+  "서울": ["./admdong_서울특별시.json"]
+  // "경기": ["./admdong_경기도.json"],
+  // "인천": ["./admdong_인천광역시.json"],
+  // ...
+};
+
 /* =========================================================================
    1) 카카오맵 SDK 동적 로드
 ========================================================================= */
@@ -237,6 +259,10 @@ let zones = [];          // zones.json 파싱 결과
 let currentOpacity = 0.4;
 let cityFilter = "__all__";
 let searchTerm = "";
+
+let admdongPolygons = [];      // 현재 지도에 그려진 행정동 경계 Polygon들
+let admdongCache = {};         // { "서울": [...파싱된 행정동 데이터] } 캐시
+let admdongLoading = false;
 
 /* =========================================================================
    3) zones.json 구조
@@ -276,6 +302,7 @@ function initMap() {
   renderZoneList();
   bindControls();
   applyFilter();
+  updateAdmdongAvailability();
 
   document.getElementById("totalCount").textContent = zones.length;
 }
@@ -369,6 +396,88 @@ function renderZoneList() {
 }
 
 /* =========================================================================
+   4.5) 행정동 경계선 (실제 행정동, 지역별 lazy load)
+========================================================================= */
+function updateAdmdongAvailability() {
+  const toggle = document.getElementById("admdongToggle");
+  const desc = document.getElementById("admdongDesc");
+  const available = !!ADMDONG_FILE_MAP[cityFilter];
+
+  if (!available) {
+    toggle.checked = false;
+    toggle.disabled = true;
+    desc.textContent = cityFilter === "__all__"
+      ? "지역 필터에서 지원 지역 선택 시 활성화"
+      : `${cityFilter} 지역은 아직 데이터가 없어요`;
+    clearAdmdongPolygons();
+  } else {
+    toggle.disabled = false;
+    desc.textContent = `${cityFilter} 행정동 경계 표시 가능`;
+  }
+}
+
+function clearAdmdongPolygons() {
+  admdongPolygons.forEach(p => p.setMap(null));
+  admdongPolygons = [];
+}
+
+async function loadAdmdongForCity(city) {
+  if (admdongCache[city]) return admdongCache[city];
+
+  const files = ADMDONG_FILE_MAP[city] || [];
+  const all = [];
+  for (const url of files) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("ADMDONG_FETCH_FAIL: " + url);
+    const data = await res.json();
+    all.push(...data);
+  }
+  admdongCache[city] = all;
+  return all;
+}
+
+async function renderAdmdongForCurrentCity() {
+  clearAdmdongPolygons();
+  if (!ADMDONG_FILE_MAP[cityFilter]) return;
+
+  admdongLoading = true;
+  try {
+    const dongs = await loadAdmdongForCity(cityFilter);
+    dongs.forEach(dong => {
+      dong.parts.forEach(part => {
+        const path = part.map(([lat, lng]) => new kakao.maps.LatLng(lat, lng));
+        const polygon = new kakao.maps.Polygon({
+          path,
+          strokeWeight: 1.3,
+          strokeColor: "#ffffff",
+          strokeOpacity: 0.85,
+          strokeStyle: "solid",
+          fillColor: "#000000",
+          fillOpacity: 0 // 테두리만 표시, 채우기 없음
+        });
+        kakao.maps.event.addListener(polygon, "mouseover", () => {
+          polygon.setOptions({ strokeWeight: 2.5, strokeColor: "#ff5252" });
+        });
+        kakao.maps.event.addListener(polygon, "mouseout", () => {
+          polygon.setOptions({ strokeWeight: 1.3, strokeColor: "#ffffff" });
+        });
+        kakao.maps.event.addListener(polygon, "click", (mouseEvent) => {
+          infoWindow.setContent(`<div class="info-window"><b>${dong.name}</b></div>`);
+          infoWindow.setPosition(mouseEvent.latLng);
+          infoWindow.open(map);
+        });
+        polygon.setMap(map);
+        admdongPolygons.push(polygon);
+      });
+    });
+  } catch (err) {
+    console.error(err);
+  } finally {
+    admdongLoading = false;
+  }
+}
+
+/* =========================================================================
    5) 필터 적용 (지도 위 표시 여부 + 목록)
 ========================================================================= */
 function applyFilter() {
@@ -409,11 +518,24 @@ function bindControls() {
   document.getElementById("citySelect").addEventListener("change", (e) => {
     cityFilter = e.target.value;
     applyFilter();
+    updateAdmdongAvailability();
+    // 지역이 바뀌면 이전 지역의 행정동 경계는 지워줌 (토글은 유지, 다시 켜면 새 지역으로 로드)
+    if (document.getElementById("admdongToggle").checked) {
+      renderAdmdongForCurrentCity();
+    }
   });
 
   document.getElementById("searchInput").addEventListener("input", (e) => {
     searchTerm = e.target.value.trim().toLowerCase();
     applyFilter();
+  });
+
+  document.getElementById("admdongToggle").addEventListener("change", (e) => {
+    if (e.target.checked) {
+      renderAdmdongForCurrentCity();
+    } else {
+      clearAdmdongPolygons();
+    }
   });
 }
 
