@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>배달권역 지도 - 카카오맵</title>
+<style>
+  :root{
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel-border: #262b35;
+    --text: #e7e9ee;
+    --text-dim: #9aa1ad;
+    --accent: #ffcc33; /* 카카오 옐로 톤 */
+    --accent-dim: #4a4020;
+    --danger: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin:0; padding:0; height:100%; font-family: -apple-system, "Apple SD Gothic Neo", "Pretendard", "Malgun Gothic", sans-serif; background: var(--bg); color: var(--text); }
+
+  .app { display:flex; height:100vh; }
+
+  /* ---------- 사이드바 ---------- */
+  .sidebar {
+    width: 300px;
+    min-width: 300px;
+    background: var(--panel);
+    border-right: 1px solid var(--panel-border);
+    display:flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+  .sidebar-header {
+    padding: 18px 18px 12px;
+    border-bottom: 1px solid var(--panel-border);
+  }
+  .sidebar-header h1 {
+    font-size: 16px;
+    margin: 0 0 4px;
+    letter-spacing: -0.2px;
+  }
+  .sidebar-header p {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .section { padding: 16px 18px; border-bottom: 1px solid var(--panel-border); }
+  .section h2 {
+    font-size: 12px;
+    color: var(--text-dim);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin: 0 0 12px;
+  }
+
+  /* 토글 스위치 */
+  .toggle-row {
+    display:flex;
+    align-items:center;
+    justify-content: space-between;
+    padding: 8px 0;
+  }
+  .toggle-row .label { font-size: 13px; }
+  .toggle-row .desc { font-size: 11px; color: var(--text-dim); margin-top:2px; }
+  .switch {
+    position: relative;
+    width: 40px;
+    height: 22px;
+    flex-shrink: 0;
+  }
+  .switch input { opacity:0; width:0; height:0; }
+  .slider {
+    position:absolute; cursor:pointer; inset:0;
+    background: #2c3140;
+    transition: .2s;
+    border-radius: 999px;
+  }
+  .slider:before {
+    content:"";
+    position:absolute;
+    width:16px; height:16px;
+    left:3px; top:3px;
+    background: #fff;
+    transition:.2s;
+    border-radius:50%;
+  }
+  input:checked + .slider { background: var(--accent); }
+  input:checked + .slider:before { transform: translateX(18px); }
+
+  /* 투명도 슬라이더 */
+  .range-row { padding: 4px 0 10px; }
+  .range-row label { font-size:12px; color: var(--text-dim); display:flex; justify-content:space-between; margin-bottom:6px;}
+  input[type="range"] { width:100%; accent-color: var(--accent); }
+
+  /* 권역 리스트 */
+  .zone-list { list-style:none; margin:0; padding:0; }
+  .zone-item {
+    display:flex;
+    align-items:center;
+    gap:10px;
+    padding: 9px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: background .15s;
+  }
+  .zone-item:hover { background: #1e2230; }
+  .zone-item.active { background: #232840; }
+  .zone-swatch {
+    width: 12px; height:12px;
+    border-radius: 3px;
+    flex-shrink:0;
+    border: 1px solid rgba(255,255,255,0.25);
+  }
+  .zone-item .zone-name { flex:1; }
+  .zone-item .zone-count { font-size:11px; color:var(--text-dim); }
+
+  .legend-note {
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height:1.5;
+    padding: 4px 2px 0;
+  }
+
+  /* ---------- 지도 영역 ---------- */
+  .map-wrap { position: relative; flex:1; }
+  #map { width:100%; height:100%; }
+
+  .map-badge {
+    position:absolute;
+    top:14px; left:14px;
+    background: rgba(23,26,33,0.9);
+    border: 1px solid var(--panel-border);
+    color: var(--text);
+    font-size: 12px;
+    padding: 7px 12px;
+    border-radius: 8px;
+    z-index: 5;
+    backdrop-filter: blur(4px);
+  }
+
+  .info-window {
+    font-family: inherit;
+    font-size: 12.5px;
+    padding: 2px 2px;
+    color: #222;
+  }
+  .info-window b { font-size: 13.5px; }
+
+  #api-key-warning {
+    position:absolute;
+    inset:0;
+    background: rgba(15,17,21,0.96);
+    z-index: 20;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    text-align:center;
+    padding: 40px;
+  }
+  #api-key-warning .box { max-width: 480px; }
+  #api-key-warning h2 { margin-top:0; font-size: 18px; }
+  #api-key-warning p { color: var(--text-dim); font-size: 13px; line-height:1.6; }
+  #api-key-warning code {
+    background: #1e2230;
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: var(--accent);
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ================= 사이드바 ================= -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <h1>배달권역 지도</h1>
+      <p>카카오맵 기반 · 권역 폴리곤 데모</p>
+    </div>
+
+    <div class="section">
+      <h2>지도 옵션</h2>
+
+      <div class="toggle-row">
+        <div>
+          <div class="label">행정동 경계 표시</div>
+          <div class="desc">카카오맵 기본 행정동 레이어 ON/OFF</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="districtToggle" />
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="toggle-row">
+        <div>
+          <div class="label">배달권역 표시</div>
+          <div class="desc">권역 폴리곤 전체 ON/OFF</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="zoneToggle" checked />
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="range-row">
+        <label><span>권역 채우기 투명도</span><span id="opacityVal">40%</span></label>
+        <input type="range" id="opacitySlider" min="0" max="100" value="40" />
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>배달권역 목록</h2>
+      <ul class="zone-list" id="zoneList"></ul>
+    </div>
+
+    <div class="section" style="border-bottom:none;">
+      <h2>안내</h2>
+      <p class="legend-note">
+        지역별 폴리곤 좌표(zoneData)를 실제 배달권역 좌표로 교체하면 됩니다.
+        행정동 경계를 켜면 카카오맵 자체 레이어가 권역 폴리곤 위에 겹쳐져
+        권역이 행정동 단위로 쪼개져 보이는 효과가 납니다.
+      </p>
+    </div>
+  </aside>
+
+  <!-- ================= 지도 ================= -->
+  <div class="map-wrap">
+    <div class="map-badge">배달권역 <span id="zoneCountBadge">0</span>개 표시 중</div>
+    <div id="map"></div>
+    <div id="api-key-warning">
+      <div class="box">
+        <h2>카카오 JS 키를 입력해주세요</h2>
+        <p>
+          이 파일 하단의 <code>&lt;script&gt;</code> 태그에서<br/>
+          <code>YOUR_KAKAO_JS_KEY</code> 부분을<br/>
+          카카오 디벨로퍼스에서 발급받은 <b>JavaScript 키</b>로 교체하세요.<br/><br/>
+          + 카카오 디벨로퍼스 &gt; 내 애플리케이션 &gt; 플랫폼 &gt; Web<br/>
+          에 사용 도메인을 등록해야 정상 동작합니다.
+        </p>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+/* =========================================================================
+   1) 배달권역 샘플 데이터
+   ---------------------------------------------------------------------
+   실제 서비스에서는 이 zoneData 배열을 서버/DB에서 불러온 좌표로 교체하면 됩니다.
+   path는 [lat, lng] 쌍의 배열이며, 폴리곤을 그리는 꼭짓점 순서입니다.
+   (아래 좌표는 강남 인근 예시용 임의 좌표입니다 - 실제 행정 경계와 다를 수 있음)
+========================================================================= */
+const zoneData = [
+  {
+    id: "zone-a",
+    name: "A권역 (강남역 인근)",
+    color: "#ffcc33",
+    path: [
+      [37.4989, 127.0245],
+      [37.5029, 127.0300],
+      [37.5010, 127.0365],
+      [37.4960, 127.0350],
+      [37.4950, 127.0280]
+    ]
+  },
+  {
+    id: "zone-b",
+    name: "B권역 (역삼 인근)",
+    color: "#4dabf7",
+    path: [
+      [37.5010, 127.0365],
+      [37.5029, 127.0300],
+      [37.5070, 127.0340],
+      [37.5075, 127.0420],
+      [37.5020, 127.0430]
+    ]
+  },
+  {
+    id: "zone-c",
+    name: "C권역 (삼성 인근)",
+    color: "#69db7c",
+    path: [
+      [37.5075, 127.0420],
+      [37.5070, 127.0340],
+      [37.5110, 127.0330],
+      [37.5140, 127.0430],
+      [37.5100, 127.0470]
+    ]
+  }
+];
+
+/* =========================================================================
+   2) 카카오맵 SDK 동적 로드
+   ---------------------------------------------------------------------
+   autoload=false 로 불러온 뒤 kakao.maps.load() 콜백에서 지도를 초기화합니다.
+   YOUR_KAKAO_JS_KEY 를 실제 발급받은 JavaScript 키로 교체하세요.
+========================================================================= */
+const KAKAO_JS_KEY = "9b4bddbadae09bdcf433079afe6487d0";
+
+function loadKakaoSdk(appKey) {
+  return new Promise((resolve, reject) => {
+    if (!appKey || appKey === "YOUR_KAKAO_JS_KEY") {
+      reject(new Error("NO_KEY"));
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = `//dapi.kakao.com/v2/maps/sdk.js?appkey=${appKey}&autoload=false&libraries=services`;
+    script.onload = () => window.kakao.maps.load(resolve);
+    script.onerror = () => reject(new Error("SDK_LOAD_FAIL"));
+    document.head.appendChild(script);
+  });
+}
+
+/* =========================================================================
+   3) 지도 초기화 + 권역 폴리곤 렌더링 + 행정동 토글
+========================================================================= */
+let map;
+let polygons = {};      // zoneId -> kakao.maps.Polygon
+let infoWindow;
+let currentOpacity = 0.4;
+
+function initMap() {
+  const container = document.getElementById("map");
+  const center = new kakao.maps.LatLng(37.5030, 127.0350);
+
+  map = new kakao.maps.Map(container, {
+    center,
+    level: 6
+  });
+
+  infoWindow = new kakao.maps.InfoWindow({ removable: true });
+
+  renderZonePolygons();
+  renderZoneList();
+  bindControls();
+}
+
+function renderZonePolygons() {
+  zoneData.forEach(zone => {
+    const path = zone.path.map(([lat, lng]) => new kakao.maps.LatLng(lat, lng));
+
+    const polygon = new kakao.maps.Polygon({
+      path,
+      strokeWeight: 2,
+      strokeColor: zone.color,
+      strokeOpacity: 0.9,
+      strokeStyle: "solid",
+      fillColor: zone.color,
+      fillOpacity: currentOpacity
+    });
+
+    // 클릭 시 정보창 표시
+    kakao.maps.event.addListener(polygon, "click", (mouseEvent) => {
+      infoWindow.setContent(
+        `<div class="info-window"><b>${zone.name}</b><br/>꼭짓점 ${zone.path.length}개</div>`
+      );
+      infoWindow.setPosition(mouseEvent.latLng);
+      infoWindow.open(map);
+    });
+
+    // 마우스오버 시 살짝 하이라이트
+    kakao.maps.event.addListener(polygon, "mouseover", () => {
+      polygon.setOptions({ fillOpacity: Math.min(currentOpacity + 0.25, 0.85) });
+    });
+    kakao.maps.event.addListener(polygon, "mouseout", () => {
+      polygon.setOptions({ fillOpacity: currentOpacity });
+    });
+
+    polygon.setMap(map);
+    polygons[zone.id] = polygon;
+  });
+
+  document.getElementById("zoneCountBadge").textContent = zoneData.length;
+}
+
+function renderZoneList() {
+  const listEl = document.getElementById("zoneList");
+  listEl.innerHTML = "";
+
+  zoneData.forEach(zone => {
+    const li = document.createElement("li");
+    li.className = "zone-item";
+    li.innerHTML = `
+      <span class="zone-swatch" style="background:${zone.color}"></span>
+      <span class="zone-name">${zone.name}</span>
+      <span class="zone-count">${zone.path.length}pt</span>
+    `;
+    li.addEventListener("click", () => {
+      const bounds = new kakao.maps.LatLngBounds();
+      zone.path.forEach(([lat, lng]) => bounds.extend(new kakao.maps.LatLng(lat, lng)));
+      map.setBounds(bounds);
+
+      document.querySelectorAll(".zone-item").forEach(el => el.classList.remove("active"));
+      li.classList.add("active");
+    });
+    listEl.appendChild(li);
+  });
+}
+
+function bindControls() {
+  // 행정동 경계 ON/OFF - 카카오맵 내장 오버레이 타입
+  const districtToggle = document.getElementById("districtToggle");
+  districtToggle.addEventListener("change", (e) => {
+    if (e.target.checked) {
+      map.addOverlayMapTypeId(kakao.maps.MapTypeId.USE_DISTRICT);
+    } else {
+      map.removeOverlayMapTypeId(kakao.maps.MapTypeId.USE_DISTRICT);
+    }
+  });
+
+  // 배달권역 전체 ON/OFF
+  const zoneToggle = document.getElementById("zoneToggle");
+  zoneToggle.addEventListener("change", (e) => {
+    const visible = e.target.checked;
+    Object.values(polygons).forEach(p => p.setMap(visible ? map : null));
+  });
+
+  // 채우기 투명도
+  const opacitySlider = document.getElementById("opacitySlider");
+  const opacityVal = document.getElementById("opacityVal");
+  opacitySlider.addEventListener("input", (e) => {
+    currentOpacity = Number(e.target.value) / 100;
+    opacityVal.textContent = `${e.target.value}%`;
+    Object.values(polygons).forEach(p => p.setOptions({ fillOpacity: currentOpacity }));
+  });
+}
+
+/* =========================================================================
+   4) 부트스트랩
+========================================================================= */
+loadKakaoSdk(KAKAO_JS_KEY)
+  .then(() => {
+    document.getElementById("api-key-warning").style.display = "none";
+    initMap();
+  })
+  .catch(() => {
+    // 키가 없으면 경고 화면만 표시 (initMap 실행 안 함)
+  });
+</script>
+
+</body>
+</html>
