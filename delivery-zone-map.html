@@ -17,7 +17,32 @@
   * { box-sizing: border-box; }
   html, body { margin:0; padding:0; height:100%; font-family: -apple-system, "Apple SD Gothic Neo", "Pretendard", "Malgun Gothic", sans-serif; background: var(--bg); color: var(--text); }
 
-  .app { display:flex; height:100vh; }
+  .app { display:flex; height:100vh; position:relative; }
+
+  /* ---------- 사이드바 토글 버튼 ---------- */
+  .sidebar-toggle-btn {
+    position:absolute;
+    top:14px; left:14px;
+    width:40px; height:40px;
+    background: rgba(23,26,33,0.92);
+    border: 1px solid var(--panel-border);
+    color: var(--text);
+    border-radius: 8px;
+    display:flex; align-items:center; justify-content:center;
+    cursor:pointer;
+    z-index: 50;
+    font-size: 18px;
+    backdrop-filter: blur(4px);
+    transition: left .25s ease;
+  }
+  .sidebar-toggle-btn:active { transform: scale(0.95); }
+
+  .sidebar-backdrop {
+    display:none;
+    position:fixed; inset:0;
+    background: rgba(0,0,0,0.5);
+    z-index: 35;
+  }
 
   /* ---------- 사이드바 ---------- */
   .sidebar {
@@ -28,6 +53,12 @@
     display:flex;
     flex-direction: column;
     overflow: hidden;
+    transition: width .25s ease, min-width .25s ease, transform .25s ease;
+  }
+  .app.sidebar-hidden .sidebar {
+    width: 0;
+    min-width: 0;
+    border-right: none;
   }
   .sidebar-header {
     padding: 18px 18px 12px;
@@ -94,7 +125,7 @@
   #map { width:100%; height:100%; }
 
   .map-badge {
-    position:absolute; top:14px; left:14px;
+    position:absolute; top:14px; left:64px;
     background: rgba(23,26,33,0.9); border: 1px solid var(--panel-border);
     color: var(--text); font-size: 12px; padding: 7px 12px; border-radius: 8px;
     z-index: 5; backdrop-filter: blur(4px);
@@ -102,6 +133,19 @@
 
   .info-window { font-family: inherit; font-size: 12.5px; padding: 2px 2px; color: #222; }
   .info-window b { font-size: 13.5px; }
+
+  .admdong-label {
+    font-size: 11.5px;
+    color: #fff;
+    background: rgba(0, 20, 30, 0.75);
+    border: 1px solid #00e5ff;
+    padding: 2px 7px;
+    border-radius: 4px;
+    white-space: nowrap;
+    pointer-events: none;
+    font-weight: 600;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+  }
 
   #loading-overlay, #api-key-warning {
     position:absolute; inset:0; background: rgba(15,17,21,0.96); z-index: 20;
@@ -111,11 +155,42 @@
   #api-key-warning h2, #loading-overlay h2 { margin-top:0; font-size: 18px; }
   #api-key-warning p, #loading-overlay p { color: var(--text-dim); font-size: 13px; line-height:1.6; }
   #api-key-warning code { background: #1e2230; padding: 2px 6px; border-radius: 4px; color: var(--accent); }
+
+  /* ---------- 모바일 대응 ---------- */
+  @media (max-width: 768px) {
+    .sidebar {
+      position: fixed;
+      top: 0; left: 0;
+      height: 100%;
+      width: 82vw;
+      max-width: 320px;
+      min-width: 0;
+      z-index: 40;
+      box-shadow: 2px 0 16px rgba(0,0,0,0.5);
+      transform: translateX(0);
+    }
+    .app.sidebar-hidden .sidebar {
+      width: 82vw;
+      max-width: 320px;
+      transform: translateX(-100%);
+    }
+    .app:not(.sidebar-hidden) .sidebar-backdrop {
+      display: block;
+    }
+    .sidebar-toggle-btn { top: 12px; left: 12px; width: 38px; height: 38px; }
+    .map-badge { top:12px; left: 60px; font-size: 11px; padding: 6px 10px; }
+    .sidebar-header { padding: 16px 16px 10px; }
+    .section { padding: 12px 16px; }
+    .zone-item { font-size: 13px; }
+  }
 </style>
 </head>
 <body>
 
-<div class="app">
+<div class="app" id="appRoot">
+
+  <button class="sidebar-toggle-btn" id="sidebarToggleBtn" title="필터 패널 접기/펼치기">☰</button>
+  <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
 
   <!-- ================= 사이드바 ================= -->
   <aside class="sidebar">
@@ -261,6 +336,8 @@ let cityFilter = "__all__";
 let searchTerm = "";
 
 let admdongPolygons = [];      // 현재 지도에 그려진 행정동 경계 Polygon들
+let admdongLabels = [];        // 현재 지도에 그려진 행정동 이름 라벨(CustomOverlay)들
+const ADMDONG_LABEL_MIN_LEVEL = 7; // 이 레벨보다 확대(숫자가 작을수록 확대)됐을 때만 라벨 표시
 let admdongCache = {};         // { "서울": [...파싱된 행정동 데이터] } 캐시
 let admdongLoading = false;
 
@@ -287,6 +364,18 @@ async function loadZones() {
   return res.json();
 }
 
+/* 권역 채우기색보다 테두리를 뚜렷하게 보이도록 어둡게 만드는 유틸 */
+function darkenColor(hex, amount) {
+  const num = parseInt(hex.replace("#", ""), 16);
+  let r = (num >> 16) - amount;
+  let g = ((num >> 8) & 0x00ff) - amount;
+  let b = (num & 0x0000ff) - amount;
+  r = Math.max(0, Math.min(255, r));
+  g = Math.max(0, Math.min(255, g));
+  b = Math.max(0, Math.min(255, b));
+  return "#" + ((r << 16) | (g << 8) | b).toString(16).padStart(6, "0");
+}
+
 /* =========================================================================
    4) 지도 초기화
 ========================================================================= */
@@ -296,6 +385,7 @@ function initMap() {
 
   map = new kakao.maps.Map(container, { center, level: 13 });
   infoWindow = new kakao.maps.InfoWindow({ removable: true });
+  kakao.maps.event.addListener(map, "zoom_changed", updateAdmdongLabelVisibility);
 
   renderZonePolygons();
   populateCitySelect();
@@ -313,9 +403,9 @@ function renderZonePolygons() {
       const path = part.map(([lat, lng]) => new kakao.maps.LatLng(lat, lng));
       const polygon = new kakao.maps.Polygon({
         path,
-        strokeWeight: 2,
-        strokeColor: zone.color,
-        strokeOpacity: 0.9,
+        strokeWeight: 3,
+        strokeColor: darkenColor(zone.color, 60),
+        strokeOpacity: 1,
         strokeStyle: "solid",
         fillColor: zone.color,
         fillOpacity: currentOpacity
@@ -329,10 +419,10 @@ function renderZonePolygons() {
         infoWindow.open(map);
       });
       kakao.maps.event.addListener(polygon, "mouseover", () => {
-        polygon.setOptions({ fillOpacity: Math.min(currentOpacity + 0.25, 0.85) });
+        polygon.setOptions({ fillOpacity: Math.min(currentOpacity + 0.25, 0.85), strokeWeight: 4 });
       });
       kakao.maps.event.addListener(polygon, "mouseout", () => {
-        polygon.setOptions({ fillOpacity: currentOpacity });
+        polygon.setOptions({ fillOpacity: currentOpacity, strokeWeight: 3 });
       });
 
       return polygon;
@@ -419,6 +509,25 @@ function updateAdmdongAvailability() {
 function clearAdmdongPolygons() {
   admdongPolygons.forEach(p => p.setMap(null));
   admdongPolygons = [];
+  admdongLabels.forEach(l => l.setMap(null));
+  admdongLabels = [];
+}
+
+function shortDongName(fullName) {
+  // "서울특별시 종로구 사직동" -> "사직동"
+  const tokens = fullName.trim().split(/\s+/);
+  return tokens[tokens.length - 1];
+}
+
+function centroidOf(part) {
+  let sumLat = 0, sumLng = 0;
+  part.forEach(([lat, lng]) => { sumLat += lat; sumLng += lng; });
+  return [sumLat / part.length, sumLng / part.length];
+}
+
+function updateAdmdongLabelVisibility() {
+  const show = map.getLevel() <= ADMDONG_LABEL_MIN_LEVEL;
+  admdongLabels.forEach(l => l.setMap(show ? map : null));
 }
 
 async function loadAdmdongForCity(city) {
@@ -444,22 +553,40 @@ async function renderAdmdongForCurrentCity() {
   try {
     const dongs = await loadAdmdongForCity(cityFilter);
     dongs.forEach(dong => {
+      // 라벨은 파트 중 가장 면적(둘레 기준 근사)이 큰 파트 중심에 하나만 표시
+      let biggestPart = dong.parts[0];
+      dong.parts.forEach(part => {
+        if (part.length > biggestPart.length) biggestPart = part;
+      });
+      const [cLat, cLng] = centroidOf(biggestPart);
+      const labelDiv = document.createElement("div");
+      labelDiv.className = "admdong-label";
+      labelDiv.textContent = shortDongName(dong.name);
+      const label = new kakao.maps.CustomOverlay({
+        position: new kakao.maps.LatLng(cLat, cLng),
+        content: labelDiv,
+        yAnchor: 0.5,
+        zIndex: 10
+      });
+      label.setMap(map.getLevel() <= ADMDONG_LABEL_MIN_LEVEL ? map : null);
+      admdongLabels.push(label);
+
       dong.parts.forEach(part => {
         const path = part.map(([lat, lng]) => new kakao.maps.LatLng(lat, lng));
         const polygon = new kakao.maps.Polygon({
           path,
-          strokeWeight: 1.3,
-          strokeColor: "#ffffff",
-          strokeOpacity: 0.85,
+          strokeWeight: 2.2,
+          strokeColor: "#00e5ff",
+          strokeOpacity: 1,
           strokeStyle: "solid",
-          fillColor: "#000000",
+          fillColor: "#00e5ff",
           fillOpacity: 0 // 테두리만 표시, 채우기 없음
         });
         kakao.maps.event.addListener(polygon, "mouseover", () => {
-          polygon.setOptions({ strokeWeight: 2.5, strokeColor: "#ff5252" });
+          polygon.setOptions({ strokeWeight: 3.5, strokeColor: "#ff5252" });
         });
         kakao.maps.event.addListener(polygon, "mouseout", () => {
-          polygon.setOptions({ strokeWeight: 1.3, strokeColor: "#ffffff" });
+          polygon.setOptions({ strokeWeight: 2.2, strokeColor: "#00e5ff" });
         });
         kakao.maps.event.addListener(polygon, "click", (mouseEvent) => {
           infoWindow.setContent(`<div class="info-window"><b>${dong.name}</b></div>`);
@@ -537,6 +664,33 @@ function bindControls() {
       clearAdmdongPolygons();
     }
   });
+
+  bindSidebarToggle();
+}
+
+/* =========================================================================
+   6.5) 사이드바(필터 패널) 접기/펼치기 + 모바일 대응
+========================================================================= */
+function setSidebarHidden(hidden) {
+  const appRoot = document.getElementById("appRoot");
+  appRoot.classList.toggle("sidebar-hidden", hidden);
+  document.getElementById("sidebarToggleBtn").textContent = hidden ? "☰" : "✕";
+}
+
+function bindSidebarToggle() {
+  const toggleBtn = document.getElementById("sidebarToggleBtn");
+  const backdrop = document.getElementById("sidebarBackdrop");
+  const appRoot = document.getElementById("appRoot");
+
+  toggleBtn.addEventListener("click", () => {
+    setSidebarHidden(!appRoot.classList.contains("sidebar-hidden"));
+  });
+  backdrop.addEventListener("click", () => setSidebarHidden(true));
+
+  // 모바일 화면에서는 지도부터 크게 보이도록 기본적으로 필터 패널을 접어둠
+  if (window.innerWidth <= 768) {
+    setSidebarHidden(true);
+  }
 }
 
 /* =========================================================================
