@@ -249,7 +249,7 @@
         </select>
       </div>
       <div class="field">
-        <input type="text" id="searchInput" placeholder="권역명 검색 (예: 강남)" />
+        <input type="text" id="searchInput" placeholder="권역명 검색, 쉼표로 여러개 (예: 강남,역삼)" />
       </div>
     </div>
 
@@ -262,7 +262,7 @@
       <p class="legend-note">
         <b>지적편집도</b>는 카카오맵 기본 레이어(용도지역 정보)입니다.<br/><br/>
         <b>행정동 경계선</b>은 통계청 데이터 기반 GeoJSON을 별도로 불러와 표시합니다.
-        현재는 <b>서울, 경기, 인천, 강원</b>을 지원하며, 지역 필터에서 해당 지역을 선택하면 토글이 활성화됩니다.
+        전국 모든 지역을 지원하며(세종은 충청에 포함), 지역 필터에서 지역을 선택하면 토글이 활성화됩니다.
         다른 지역은 데이터 추가 후 지원 예정입니다.
       </p>
     </div>
@@ -308,8 +308,16 @@ const ADMDONG_FILE_MAP = {
   "서울": ["./admdong_서울특별시.json"],
   "경기": ["./admdong_경기도.json"],
   "인천": ["./admdong_인천광역시.json"],
-  "강원": ["./admdong_강원도.json"]
-  // ...
+  "강원": ["./admdong_강원도.json"],
+  "부산": ["./admdong_부산광역시.json"],
+  "광주": ["./admdong_광주광역시.json"],
+  "대전": ["./admdong_대전광역시.json"],
+  "대구": ["./admdong_대구광역시.json"],
+  "울산": ["./admdong_울산광역시.json"],
+  "제주": ["./admdong_제주특별자치도.json"],
+  "경상": ["./admdong_경상남도.json", "./admdong_경상북도.json"],
+  "전라": ["./admdong_전라남도.json", "./admdong_전라북도.json"],
+  "충청": ["./admdong_충청남도.json", "./admdong_충청북도.json", "./admdong_세종특별자치시.json"]
 };
 
 /* =========================================================================
@@ -334,7 +342,7 @@ let infoWindow;
 let zones = [];          // zones.json 파싱 결과
 let currentOpacity = 0.4;
 let cityFilter = "__all__";
-let searchTerm = "";
+let searchTerms = []; // 콤마/공백으로 구분된 복수 검색어
 
 let admdongPolygons = [];      // 현재 지도에 그려진 행정동 경계 Polygon들
 let admdongLabels = [];        // 현재 지도에 그려진 행정동 이름 라벨(CustomOverlay)들
@@ -447,9 +455,10 @@ function populateCitySelect() {
 function getFilteredZones() {
   return zones.filter(z => {
     const matchCity = cityFilter === "__all__" || z.city === cityFilter;
-    const matchSearch = !searchTerm ||
-      z.name.toLowerCase().includes(searchTerm) ||
-      z.city.toLowerCase().includes(searchTerm);
+    const matchSearch = searchTerms.length === 0 ||
+      searchTerms.some(term =>
+        z.name.toLowerCase().includes(term) || z.city.toLowerCase().includes(term)
+      );
     return matchCity && matchSearch;
   });
 }
@@ -654,7 +663,11 @@ function bindControls() {
   });
 
   document.getElementById("searchInput").addEventListener("input", (e) => {
-    searchTerm = e.target.value.trim().toLowerCase();
+    searchTerms = e.target.value
+      .toLowerCase()
+      .split(/[,\s]+/)      // 쉼표 또는 공백으로 구분
+      .map(t => t.trim())
+      .filter(t => t.length > 0);
     applyFilter();
   });
 
