@@ -973,6 +973,7 @@ async function bootApp() {
 /* =========================================================================
    8) 구글 로그인 게이트 (@wesang.com 계정만 통과)
 ========================================================================= */
+const AUTH_GATE_ENABLED = false; // 구글 클라이언트 ID 준비되면 true로 변경
 const ALLOWED_EMAIL_DOMAIN = "wesang.com";
 const GOOGLE_CLIENT_ID = "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com";
 const SESSION_KEY = "delivery_map_session";
@@ -1027,6 +1028,12 @@ function checkExistingSession() {
 }
 
 window.addEventListener("load", () => {
+  if (!AUTH_GATE_ENABLED) {
+    document.getElementById("loginGate").style.display = "none";
+    bootApp();
+    return;
+  }
+
   if (checkExistingSession()) {
     document.getElementById("loginGate").style.display = "none";
     bootApp();
