@@ -4,6 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>배달권역 지도 - 카카오맵</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
   :root{
     --bg: #0f1115;
@@ -156,6 +157,119 @@
   #api-key-warning p, #loading-overlay p { color: var(--text-dim); font-size: 13px; line-height:1.6; }
   #api-key-warning code { background: #1e2230; padding: 2px 6px; border-radius: 4px; color: var(--accent); }
 
+  /* ---------- 상단 주소/장소 검색바 ---------- */
+  .top-search-wrap {
+    position: absolute;
+    top: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 100%;
+    max-width: 420px;
+    z-index: 20;
+  }
+  .top-search-box {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(23,26,33,0.95);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 6px 8px 6px 14px;
+    backdrop-filter: blur(6px);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+  }
+  .top-search-box input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text);
+    font-size: 13.5px;
+    padding: 6px 0;
+  }
+  .top-search-box input::placeholder { color: var(--text-dim); }
+  .top-search-box button {
+    background: var(--accent);
+    border: none;
+    color: #1a1a1a;
+    font-weight: 600;
+    font-size: 13px;
+    padding: 7px 14px;
+    border-radius: 7px;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .top-search-box button:active { transform: scale(0.97); }
+
+  .search-results-dropdown {
+    margin-top: 6px;
+    background: rgba(23,26,33,0.97);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    overflow: hidden;
+    max-height: 260px;
+    overflow-y: auto;
+    display: none;
+  }
+  .search-results-dropdown.show { display: block; }
+  .search-result-item {
+    padding: 10px 14px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--panel-border);
+    font-size: 13px;
+  }
+  .search-result-item:last-child { border-bottom: none; }
+  .search-result-item:hover { background: #1e2230; }
+  .search-result-item .r-name { font-weight: 600; margin-bottom: 2px; }
+  .search-result-item .r-addr { font-size: 11.5px; color: var(--text-dim); }
+
+  .zone-result-toast {
+    margin-top: 6px;
+    padding: 10px 14px;
+    border-radius: 10px;
+    font-size: 13px;
+    background: rgba(23,26,33,0.97);
+    border: 1px solid var(--panel-border);
+    display: none;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .zone-result-toast.show { display: flex; }
+  .zone-result-row { display:flex; align-items:center; gap:8px; }
+  .zone-result-toast .swatch { width: 12px; height:12px; border-radius:3px; flex-shrink:0; }
+
+  @media (max-width: 768px) {
+    .top-search-wrap { max-width: none; width: calc(100% - 24px); top: 60px; }
+  }
+
+  /* ---------- 로그인 게이트 ---------- */
+  #loginGate {
+    position: fixed; inset: 0;
+    background: var(--bg);
+    z-index: 1000;
+    display:flex; align-items:center; justify-content:center;
+    padding: 24px;
+  }
+  .login-card {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 14px;
+    padding: 36px 32px;
+    max-width: 380px;
+    width: 100%;
+    text-align: center;
+  }
+  .login-card h1 { font-size: 18px; margin: 0 0 8px; }
+  .login-card p { font-size: 13px; color: var(--text-dim); margin: 0 0 24px; line-height:1.5; }
+  #googleSignInDiv { display:flex; justify-content:center; }
+  .login-error {
+    margin-top: 16px;
+    font-size: 12.5px;
+    color: var(--danger);
+    display:none;
+  }
+  .login-error.show { display:block; }
+
   /* ---------- 모바일 대응 ---------- */
   @media (max-width: 768px) {
     .sidebar {
@@ -186,6 +300,15 @@
 </style>
 </head>
 <body>
+
+<div id="loginGate">
+  <div class="login-card">
+    <h1>배달권역 지도</h1>
+    <p>회사 구글 계정(@wesang.com)으로 로그인해야<br/>지도를 볼 수 있어요.</p>
+    <div id="googleSignInDiv"></div>
+    <div class="login-error" id="loginError">wesang.com 계정으로만 로그인할 수 있습니다.</div>
+  </div>
+</div>
 
 <div class="app" id="appRoot">
 
@@ -271,6 +394,16 @@
   <!-- ================= 지도 ================= -->
   <div class="map-wrap">
     <div class="map-badge">배달권역 <span id="zoneCountBadge">0</span>개 표시 중</div>
+
+    <div class="top-search-wrap">
+      <div class="top-search-box">
+        <input type="text" id="addressSearchInput" placeholder="주소 또는 장소명 검색" />
+        <button id="addressSearchBtn">검색</button>
+      </div>
+      <div class="search-results-dropdown" id="searchResultsDropdown"></div>
+      <div class="zone-result-toast" id="zoneResultToast"></div>
+    </div>
+
     <div id="map"></div>
 
     <div id="loading-overlay">
@@ -350,6 +483,9 @@ const ADMDONG_LABEL_MIN_LEVEL = 7; // 이 레벨보다 확대(숫자가 작을�
 let admdongCache = {};         // { "서울": [...파싱된 행정동 데이터] } 캐시
 let admdongLoading = false;
 
+let placesService = null;
+let searchMarker = null;
+
 /* =========================================================================
    3) zones.json 구조
    ---------------------------------------------------------------------
@@ -395,11 +531,13 @@ function initMap() {
   map = new kakao.maps.Map(container, { center, level: 13 });
   infoWindow = new kakao.maps.InfoWindow({ removable: true });
   kakao.maps.event.addListener(map, "zoom_changed", updateAdmdongLabelVisibility);
+  placesService = new kakao.maps.services.Places();
 
   renderZonePolygons();
   populateCitySelect();
   renderZoneList();
   bindControls();
+  bindAddressSearch();
   applyFilter();
   updateAdmdongAvailability();
 
@@ -615,6 +753,108 @@ async function renderAdmdongForCurrentCity() {
 }
 
 /* =========================================================================
+   4.7) 상단 주소/장소 검색 (카카오 Places API) + 배달권역 판별
+========================================================================= */
+function bindAddressSearch() {
+  const input = document.getElementById("addressSearchInput");
+  const btn = document.getElementById("addressSearchBtn");
+
+  const runSearch = () => {
+    const keyword = input.value.trim();
+    if (!keyword) return;
+    hideZoneResultToast();
+    placesService.keywordSearch(keyword, (results, status) => {
+      if (status !== kakao.maps.services.Status.OK) {
+        renderSearchResults([]);
+        return;
+      }
+      renderSearchResults(results.slice(0, 6));
+    });
+  };
+
+  btn.addEventListener("click", runSearch);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") runSearch();
+  });
+}
+
+function renderSearchResults(results) {
+  const dropdown = document.getElementById("searchResultsDropdown");
+  dropdown.innerHTML = "";
+
+  if (results.length === 0) {
+    dropdown.innerHTML = `<div class="search-result-item">검색 결과가 없습니다</div>`;
+    dropdown.classList.add("show");
+    return;
+  }
+
+  results.forEach(place => {
+    const item = document.createElement("div");
+    item.className = "search-result-item";
+    item.innerHTML = `
+      <div class="r-name">${place.place_name}</div>
+      <div class="r-addr">${place.road_address_name || place.address_name}</div>
+    `;
+    item.addEventListener("click", () => selectSearchResult(place));
+    dropdown.appendChild(item);
+  });
+  dropdown.classList.add("show");
+}
+
+function selectSearchResult(place) {
+  const lat = parseFloat(place.y);
+  const lng = parseFloat(place.x);
+  const position = new kakao.maps.LatLng(lat, lng);
+
+  map.setLevel(4);
+  map.setCenter(position);
+
+  if (searchMarker) searchMarker.setMap(null);
+  searchMarker = new kakao.maps.Marker({ position, map });
+
+  document.getElementById("searchResultsDropdown").classList.remove("show");
+  document.getElementById("addressSearchInput").value = place.place_name;
+
+  showZoneResultForPoint(lat, lng);
+}
+
+/* Ray-casting 알고리즘으로 점(lat,lng)이 폴리곤 링 내부에 있는지 판별 */
+function isPointInRing(lat, lng, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [latI, lngI] = ring[i];
+    const [latJ, lngJ] = ring[j];
+    const intersect =
+      (lngI > lng) !== (lngJ > lng) &&
+      lat < ((latJ - latI) * (lng - lngI)) / (lngJ - lngI) + latI;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+function findZonesContainingPoint(lat, lng) {
+  return zones.filter(zone => zone.parts.some(part => isPointInRing(lat, lng, part)));
+}
+
+function showZoneResultForPoint(lat, lng) {
+  const matches = findZonesContainingPoint(lat, lng);
+  const toast = document.getElementById("zoneResultToast");
+
+  if (matches.length === 0) {
+    toast.innerHTML = `<div class="zone-result-row">등록된 배달권역이 없는 위치입니다</div>`;
+  } else {
+    toast.innerHTML = matches
+      .map(z => `<div class="zone-result-row"><span class="swatch" style="background:${z.color}"></span>${z.city} · ${z.name}</div>`)
+      .join("");
+  }
+  toast.classList.add("show");
+}
+
+function hideZoneResultToast() {
+  document.getElementById("zoneResultToast").classList.remove("show");
+}
+
+/* =========================================================================
    5) 필터 적용 (지도 위 표시 여부 + 목록)
 ========================================================================= */
 function applyFilter() {
@@ -708,9 +948,9 @@ function bindSidebarToggle() {
 }
 
 /* =========================================================================
-   7) 부트스트랩
+   7) 부트스트랩 (구글 로그인 통과 후 호출됨)
 ========================================================================= */
-(async () => {
+async function bootApp() {
   try {
     const [_, zonesData] = await Promise.all([
       loadKakaoSdk(KAKAO_JS_KEY),
@@ -728,7 +968,81 @@ function bindSidebarToggle() {
     }
     document.getElementById("api-key-warning").style.display = "flex";
   }
-})();
+}
+
+/* =========================================================================
+   8) 구글 로그인 게이트 (@wesang.com 계정만 통과)
+========================================================================= */
+const ALLOWED_EMAIL_DOMAIN = "wesang.com";
+const GOOGLE_CLIENT_ID = "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com";
+const SESSION_KEY = "delivery_map_session";
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12시간 유지
+
+function parseJwt(token) {
+  const base64Url = token.split(".")[1];
+  const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
+  const json = decodeURIComponent(
+    atob(base64)
+      .split("")
+      .map(c => "%" + c.charCodeAt(0).toString(16).padStart(2, "0"))
+      .join("")
+  );
+  return JSON.parse(json);
+}
+
+function grantAccess(email) {
+  localStorage.setItem(SESSION_KEY, JSON.stringify({ email, ts: Date.now() }));
+  document.getElementById("loginGate").style.display = "none";
+  bootApp();
+}
+
+function handleGoogleCredential(response) {
+  try {
+    const payload = parseJwt(response.credential);
+    const email = (payload.email || "").toLowerCase();
+    const verified = payload.email_verified;
+    const domainOk = email.endsWith("@" + ALLOWED_EMAIL_DOMAIN);
+
+    if (verified && domainOk) {
+      grantAccess(email);
+    } else {
+      document.getElementById("loginError").classList.add("show");
+    }
+  } catch (e) {
+    document.getElementById("loginError").classList.add("show");
+  }
+}
+
+function checkExistingSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return false;
+    const { email, ts } = JSON.parse(raw);
+    const fresh = Date.now() - ts < SESSION_TTL_MS;
+    const domainOk = (email || "").toLowerCase().endsWith("@" + ALLOWED_EMAIL_DOMAIN);
+    return fresh && domainOk;
+  } catch (e) {
+    return false;
+  }
+}
+
+window.addEventListener("load", () => {
+  if (checkExistingSession()) {
+    document.getElementById("loginGate").style.display = "none";
+    bootApp();
+    return;
+  }
+
+  google.accounts.id.initialize({
+    client_id: GOOGLE_CLIENT_ID,
+    callback: handleGoogleCredential,
+    hd: ALLOWED_EMAIL_DOMAIN
+  });
+  google.accounts.id.renderButton(
+    document.getElementById("googleSignInDiv"),
+    { theme: "outline", size: "large", text: "continue_with", locale: "ko" }
+  );
+});
 </script>
 
 </body>
