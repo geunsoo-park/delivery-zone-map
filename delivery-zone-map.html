@@ -484,6 +484,7 @@ let admdongCache = {};         // { "서울": [...파싱된 행정동 데이터]
 let admdongLoading = false;
 
 let placesService = null;
+let geocoderService = null;
 let searchMarker = null;
 
 /* =========================================================================
@@ -532,6 +533,7 @@ function initMap() {
   infoWindow = new kakao.maps.InfoWindow({ removable: true });
   kakao.maps.event.addListener(map, "zoom_changed", updateAdmdongLabelVisibility);
   placesService = new kakao.maps.services.Places();
+  geocoderService = new kakao.maps.services.Geocoder();
 
   renderZonePolygons();
   populateCitySelect();
@@ -759,22 +761,58 @@ function bindAddressSearch() {
   const input = document.getElementById("addressSearchInput");
   const btn = document.getElementById("addressSearchBtn");
 
-  const runSearch = () => {
+  const runSearch = async () => {
     const keyword = input.value.trim();
     if (!keyword) return;
     hideZoneResultToast();
-    placesService.keywordSearch(keyword, (results, status) => {
-      if (status !== kakao.maps.services.Status.OK) {
-        renderSearchResults([]);
-        return;
-      }
-      renderSearchResults(results.slice(0, 6));
-    });
+
+    const [addressResults, placeResults] = await Promise.all([
+      searchAddress(keyword),
+      searchPlaces(keyword)
+    ]);
+
+    // 주소 검색 결과를 위쪽에, 장소(상호명) 검색 결과를 아래쪽에 배치
+    const combined = [...addressResults, ...placeResults].slice(0, 8);
+    renderSearchResults(combined);
   };
 
   btn.addEventListener("click", runSearch);
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") runSearch();
+  });
+}
+
+/* 지번/도로명 주소 검색 (예: "역삼동 724-4", "테헤란로 34길 41") */
+function searchAddress(keyword) {
+  return new Promise(resolve => {
+    geocoderService.addressSearch(keyword, (results, status) => {
+      if (status !== kakao.maps.services.Status.OK) {
+        resolve([]);
+        return;
+      }
+      const normalized = results.map(addr => ({
+        place_name: addr.address_name,
+        road_address_name: addr.road_address ? addr.road_address.address_name : "",
+        address_name: addr.address_name,
+        x: addr.x,
+        y: addr.y,
+        isAddress: true
+      }));
+      resolve(normalized);
+    });
+  });
+}
+
+/* 상호명/장소 키워드 검색 (예: "역삼역 스타벅스") */
+function searchPlaces(keyword) {
+  return new Promise(resolve => {
+    placesService.keywordSearch(keyword, (results, status) => {
+      if (status !== kakao.maps.services.Status.OK) {
+        resolve([]);
+        return;
+      }
+      resolve(results.slice(0, 6));
+    });
   });
 }
 
@@ -791,9 +829,10 @@ function renderSearchResults(results) {
   results.forEach(place => {
     const item = document.createElement("div");
     item.className = "search-result-item";
+    const tag = place.isAddress ? "주소" : "장소";
     item.innerHTML = `
-      <div class="r-name">${place.place_name}</div>
-      <div class="r-addr">${place.road_address_name || place.address_name}</div>
+      <div class="r-name">[${tag}] ${place.place_name}</div>
+      <div class="r-addr">${place.road_address_name || place.address_name || ""}</div>
     `;
     item.addEventListener("click", () => selectSearchResult(place));
     dropdown.appendChild(item);
