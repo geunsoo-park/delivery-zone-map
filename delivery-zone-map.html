@@ -270,6 +270,46 @@
   }
   .login-error.show { display:block; }
 
+  /* ---------- 변경사항 알림 팝업 ---------- */
+  #changelogModal {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.55);
+    z-index: 900;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  #changelogModal.show { display: flex; }
+  .changelog-card {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 14px;
+    padding: 24px 26px;
+    max-width: 420px;
+    width: 100%;
+    max-height: 70vh;
+    overflow-y: auto;
+  }
+  .changelog-card h2 { font-size: 16px; margin: 0 0 4px; }
+  .changelog-card .cl-date { font-size: 11.5px; color: var(--text-dim); margin-bottom: 16px; }
+  .changelog-section { margin-bottom: 14px; }
+  .changelog-section:last-child { margin-bottom: 0; }
+  .changelog-section .cl-label {
+    font-size: 12px; font-weight: 600; margin-bottom: 6px;
+    display:flex; align-items:center; gap:6px;
+  }
+  .cl-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+  .cl-dot.added { background:#69db7c; }
+  .cl-dot.removed { background:#ff6b6b; }
+  .cl-dot.modified { background:#ffd43b; }
+  .changelog-section ul { margin:0; padding-left: 18px; font-size: 12.5px; color: var(--text-dim); line-height:1.7; }
+  .changelog-close-btn {
+    margin-top: 18px; width: 100%;
+    background: var(--accent); border: none; color:#1a1a1a;
+    font-weight:600; font-size: 13px; padding: 10px; border-radius: 8px; cursor:pointer;
+  }
+
   /* ---------- 모바일 대응 ---------- */
   @media (max-width: 768px) {
     .sidebar {
@@ -307,6 +347,15 @@
     <p>회사 구글 계정(@wesang.com)으로 로그인해야<br/>지도를 볼 수 있어요.</p>
     <div id="googleSignInDiv"></div>
     <div class="login-error" id="loginError">wesang.com 계정으로만 로그인할 수 있습니다.</div>
+  </div>
+</div>
+
+<div id="changelogModal">
+  <div class="changelog-card">
+    <h2>배달권역 업데이트 소식</h2>
+    <div class="cl-date" id="clDate"></div>
+    <div id="clBody"></div>
+    <button class="changelog-close-btn" id="clCloseBtn">확인했어요</button>
   </div>
 </div>
 
@@ -433,6 +482,8 @@
 ========================================================================= */
 const KAKAO_JS_KEY = "9b4bddbadae09bdcf433079afe6487d0";
 const ZONES_JSON_URL = "./zones.json"; // zones.json을 html과 같은 폴더에 두세요
+const CHANGELOG_JSON_URL = "./changelog.json"; // 변경 이력 파일 (없어도 정상 동작함)
+const CHANGELOG_SEEN_KEY = "delivery_map_changelog_seen_ts";
 
 /* 지역 필터(city_nm, 배달권역 엑셀 기준) -> 행정동 경계 파일(시/도 단위) 매핑
    파일이 준비된 지역만 값이 채워져 있습니다. 다른 지역은 admdong_xxx.json을
@@ -987,6 +1038,70 @@ function bindSidebarToggle() {
 }
 
 /* =========================================================================
+   6.7) 변경사항(changelog) 팝업
+   -----------------------------------------------------------------------
+   changelog.json은 Apps Script가 zones.json을 갱신할 때 자동으로 같이
+   기록해주는 파일. 마지막으로 본 시각(localStorage)보다 최신 이력이 있으면
+   접속 시 팝업으로 알려줌.
+========================================================================= */
+async function checkChangelog() {
+  try {
+    const res = await fetch(CHANGELOG_JSON_URL, { cache: "no-store" });
+    if (!res.ok) return; // changelog.json이 없어도 조용히 무시
+    const history = await res.json();
+    if (!Array.isArray(history) || history.length === 0) return;
+
+    const latest = history[history.length - 1];
+    const seenTs = Number(localStorage.getItem(CHANGELOG_SEEN_KEY) || 0);
+
+    if (latest.ts > seenTs) {
+      renderChangelogModal(latest);
+      document.getElementById("changelogModal").classList.add("show");
+    }
+  } catch (err) {
+    // changelog 확인 실패는 지도 사용에 영향 없어야 하므로 조용히 무시
+    console.warn("changelog 확인 실패:", err);
+  }
+}
+
+function changelogSectionHtml(label, dotClass, items) {
+  if (!items || items.length === 0) return "";
+  const listItems = items
+    .slice(0, 8)
+    .map(z => `<li>${z.city} · ${z.name}</li>`)
+    .join("");
+  const more = items.length > 8 ? `<li>외 ${items.length - 8}건</li>` : "";
+  return `
+    <div class="changelog-section">
+      <div class="cl-label"><span class="cl-dot ${dotClass}"></span>${label} (${items.length})</div>
+      <ul>${listItems}${more}</ul>
+    </div>
+  `;
+}
+
+function renderChangelogModal(entry) {
+  const dateEl = document.getElementById("clDate");
+  const bodyEl = document.getElementById("clBody");
+
+  const dateObj = new Date(entry.ts);
+  dateEl.textContent = dateObj.toLocaleString("ko-KR");
+
+  bodyEl.innerHTML =
+    changelogSectionHtml("추가된 권역", "added", entry.added) +
+    changelogSectionHtml("삭제된 권역", "removed", entry.removed) +
+    changelogSectionHtml("경계가 변경된 권역", "modified", entry.modified);
+
+  if (!bodyEl.innerHTML.trim()) {
+    bodyEl.innerHTML = `<p style="color:var(--text-dim); font-size:13px;">변경된 내용이 없습니다.</p>`;
+  }
+
+  document.getElementById("clCloseBtn").onclick = () => {
+    localStorage.setItem(CHANGELOG_SEEN_KEY, String(entry.ts));
+    document.getElementById("changelogModal").classList.remove("show");
+  };
+}
+
+/* =========================================================================
    7) 부트스트랩 (구글 로그인 통과 후 호출됨)
 ========================================================================= */
 async function bootApp() {
@@ -998,6 +1113,7 @@ async function bootApp() {
     zones = zonesData;
     document.getElementById("loading-overlay").style.display = "none";
     initMap();
+    checkChangelog(); // 새 업데이트 있으면 팝업으로 안내
   } catch (err) {
     document.getElementById("loading-overlay").style.display = "none";
     if (err.message === "ZONES_FETCH_FAIL") {
