@@ -516,6 +516,7 @@
     <div class="top-search-wrap">
       <div class="top-search-box">
         <input type="text" id="addressSearchInput" placeholder="주소 또는 장소명 검색" />
+        <button id="addressClearBtn" class="secondary-btn" title="검색 취소" style="display:none;">✕</button>
         <button id="addressSearchBtn">검색</button>
         <button id="myLocationBtn" class="secondary-btn" title="내 위치로 검색">📍</button>
       </div>
@@ -936,6 +937,7 @@ function selectDong(dong, labelDiv) {
 function bindAddressSearch() {
   const input = document.getElementById("addressSearchInput");
   const btn = document.getElementById("addressSearchBtn");
+  const clearBtn = document.getElementById("addressClearBtn");
 
   const runSearch = async () => {
     const keyword = input.value.trim();
@@ -956,8 +958,29 @@ function bindAddressSearch() {
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") runSearch();
   });
+  input.addEventListener("input", updateAddressClearBtn);
+  clearBtn.addEventListener("click", clearAddressSearch);
 
   document.getElementById("myLocationBtn").addEventListener("click", useMyLocation);
+}
+
+function updateAddressClearBtn() {
+  const input = document.getElementById("addressSearchInput");
+  document.getElementById("addressClearBtn").style.display = input.value.trim() ? "flex" : "none";
+}
+
+function clearAddressSearch() {
+  const input = document.getElementById("addressSearchInput");
+  input.value = "";
+  document.getElementById("searchResultsDropdown").classList.remove("show");
+  document.getElementById("searchResultsDropdown").innerHTML = "";
+  hideZoneResultToast();
+  if (searchMarker) {
+    searchMarker.setMap(null);
+    searchMarker = null;
+  }
+  updateAddressClearBtn();
+  input.focus();
 }
 
 function useMyLocation() {
@@ -985,6 +1008,7 @@ function useMyLocation() {
       searchMarker = new kakao.maps.Marker({ position, map });
 
       document.getElementById("addressSearchInput").value = "내 위치";
+      updateAddressClearBtn();
       showZoneResultForPoint(lat, lng);
     },
     (err) => {
@@ -1066,6 +1090,7 @@ function selectSearchResult(place) {
 
   document.getElementById("searchResultsDropdown").classList.remove("show");
   document.getElementById("addressSearchInput").value = place.place_name;
+  updateAddressClearBtn();
 
   showZoneResultForPoint(lat, lng);
 }
