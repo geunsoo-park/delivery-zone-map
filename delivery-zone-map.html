@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>배달권역 지도 - 카카오맵</title>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
 <style>
   :root{
     --bg: #0f1115;
@@ -155,9 +154,14 @@
     padding: 2px 7px;
     border-radius: 4px;
     white-space: nowrap;
-    pointer-events: none;
+    pointer-events: auto;
+    cursor: pointer;
     font-weight: 600;
     text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+  }
+  .admdong-label.selected {
+    background: #ff5252;
+    border-color: #ff5252;
   }
 
   #loading-overlay, #api-key-warning {
@@ -359,28 +363,12 @@
     border-radius: 6px;
     padding: 5px 9px;
   }
-  .generic-modal .qc-row {
-    padding: 10px 0;
-    border-bottom: 1px solid var(--panel-border);
-    font-size: 12.5px;
-  }
-  .generic-modal .qc-row:last-child { border-bottom: none; }
-  .generic-modal .qc-row b { color: var(--danger); }
   .generic-modal .close-btn {
     margin-top: 18px; width: 100%;
     background: var(--accent); border: none; color:#1a1a1a;
     font-weight:600; font-size: 13px; padding: 10px; border-radius: 8px; cursor:pointer;
   }
   .generic-modal .loading-text { font-size: 13px; color: var(--text-dim); text-align:center; padding: 20px 0; }
-
-  .sidebar-action-btn {
-    display:block; width:100%;
-    background: var(--accent); border: none; color:#1a1a1a;
-    font-weight:600; font-size: 12.5px; padding: 9px; border-radius: 8px; cursor:pointer;
-    margin-bottom: 8px;
-  }
-  .sidebar-action-btn.secondary { background:#2c3140; color: var(--text); }
-  .sidebar-action-btn:last-child { margin-bottom:0; }
 
   /* ---------- 모바일 대응 ---------- */
   @media (max-width: 768px) {
@@ -437,15 +425,6 @@
     <div class="subtitle" id="zdSubtitle"></div>
     <div id="zdBody"></div>
     <button class="close-btn" id="zdCloseBtn">닫기</button>
-  </div>
-</div>
-
-<div class="generic-modal" id="qcModal">
-  <div class="card">
-    <h2>데이터 품질 검사</h2>
-    <div class="subtitle" id="qcSubtitle"></div>
-    <div id="qcBody"></div>
-    <button class="close-btn" id="qcCloseBtn">닫기</button>
   </div>
 </div>
 
@@ -520,25 +499,13 @@
       <ul class="zone-list" id="zoneList"></ul>
     </div>
 
-    <div class="section">
+    <div class="section" style="border-bottom:none;">
       <p class="legend-note">
         <b>지적편집도</b>는 카카오맵 기본 레이어(용도지역 정보)입니다.<br/><br/>
         <b>행정동 경계선</b>은 통계청 데이터 기반 GeoJSON을 별도로 불러와 표시합니다.
         전국 모든 지역을 지원하며(세종은 충청에 포함), 지역 필터에서 지역을 선택하면 토글이 활성화됩니다.
         다른 지역은 데이터 추가 후 지원 예정입니다.
       </p>
-    </div>
-
-    <div class="section" style="border-bottom:none;">
-      <h2>데이터 품질 검사</h2>
-      <div class="toggle-row" style="padding-bottom:6px;">
-        <div class="desc" style="font-size:11.5px; line-height:1.5;">
-          권역끼리 겹치는 부분이 있는지, 선택 지역의 행정동 중 어느 권역에도
-          속하지 않는 곳이 있는지 확인합니다.
-        </div>
-      </div>
-      <button class="sidebar-action-btn" id="runOverlapCheckBtn">권역 겹침 검사 실행</button>
-      <button class="sidebar-action-btn secondary" id="runGapCheckBtn">미배정 행정동 찾기 (선택 지역)</button>
     </div>
   </aside>
 
@@ -820,6 +787,8 @@ function clearAdmdongPolygons() {
   admdongPolygons = [];
   admdongLabels.forEach(l => l.setMap(null));
   admdongLabels = [];
+  selectedDongPolygons = [];
+  selectedDongLabelEl = null;
 }
 
 function shortDongName(fullName) {
@@ -863,18 +832,35 @@ async function loadAdmdongForCity(city) {
   return all;
 }
 
+/* 권역명 검색어가 있으면, 검색된 권역 안에 속하는 행정동만 남김 (중심점 기준) */
+function filterDongsBySearch(dongs) {
+  if (searchTerms.length === 0) return dongs;
+
+  const matchingZones = getFilteredZones(); // cityFilter + searchTerms 반영된 권역 목록
+  if (matchingZones.length === 0) return [];
+
+  return dongs.filter(dong => {
+    const [cLat, cLng] = getDongCentroid(dong);
+    return matchingZones.some(zone => zone.parts.some(part => isPointInRing(cLat, cLng, part)));
+  });
+}
+
 async function renderAdmdongForCurrentCity() {
   clearAdmdongPolygons();
   if (!ADMDONG_FILE_MAP[cityFilter]) return;
 
   admdongLoading = true;
   try {
-    const dongs = await loadAdmdongForCity(cityFilter);
+    const allDongs = await loadAdmdongForCity(cityFilter);
+    const dongs = filterDongsBySearch(allDongs);
     dongs.forEach(dong => {
+      dong.polygons = []; // 이 행정동에 속한 폴리곤들 (하이라이트용 참조)
+
       const [cLat, cLng] = getDongCentroid(dong);
       const labelDiv = document.createElement("div");
       labelDiv.className = "admdong-label";
       labelDiv.textContent = shortDongName(dong.name);
+      labelDiv.addEventListener("click", () => selectDong(dong, labelDiv));
       const label = new kakao.maps.CustomOverlay({
         position: new kakao.maps.LatLng(cLat, cLng),
         content: labelDiv,
@@ -882,6 +868,7 @@ async function renderAdmdongForCurrentCity() {
         zIndex: 10
       });
       label.setMap(map.getLevel() <= ADMDONG_LABEL_MIN_LEVEL ? map : null);
+      dong.labelDiv = labelDiv;
       admdongLabels.push(label);
 
       dong.parts.forEach(part => {
@@ -893,7 +880,7 @@ async function renderAdmdongForCurrentCity() {
           strokeOpacity: 1,
           strokeStyle: "solid",
           fillColor: "#00e5ff",
-          fillOpacity: 0 // 테두리만 표시, 채우기 없음
+          fillOpacity: 0 // 테두리만 표시, 채우기 없음 (선택 시에는 진하게 바뀜)
         });
         kakao.maps.event.addListener(polygon, "mouseover", () => {
           polygon.setOptions({ strokeWeight: 3.5, strokeColor: "#ff5252" });
@@ -902,11 +889,13 @@ async function renderAdmdongForCurrentCity() {
           polygon.setOptions({ strokeWeight: 2.2, strokeColor: "#00e5ff" });
         });
         kakao.maps.event.addListener(polygon, "click", (mouseEvent) => {
+          selectDong(dong, dong.labelDiv);
           infoWindow.setContent(`<div class="info-window"><b>${dong.name}</b></div>`);
           infoWindow.setPosition(mouseEvent.latLng);
           infoWindow.open(map);
         });
         polygon.setMap(map);
+        dong.polygons.push(polygon);
         admdongPolygons.push(polygon);
       });
     });
@@ -915,6 +904,30 @@ async function renderAdmdongForCurrentCity() {
   } finally {
     admdongLoading = false;
   }
+}
+
+/* 클릭한 행정동을 진하게 강조 표시 (이전 선택은 원래대로 되돌림) */
+let selectedDongPolygons = [];
+let selectedDongLabelEl = null;
+
+function selectDong(dong, labelDiv) {
+  // 이전 선택 해제
+  selectedDongPolygons.forEach(p => p.setOptions({ fillOpacity: 0 }));
+  if (selectedDongLabelEl) selectedDongLabelEl.classList.remove("selected");
+
+  // 같은 행정동을 다시 클릭하면 선택 해제만 하고 끝
+  const isSameDong = selectedDongPolygons.length > 0 && dong.polygons && selectedDongPolygons[0] === dong.polygons[0];
+  if (isSameDong) {
+    selectedDongPolygons = [];
+    selectedDongLabelEl = null;
+    return;
+  }
+
+  dong.polygons.forEach(p => p.setOptions({ fillColor: "#00e5ff", fillOpacity: 0.4 }));
+  if (labelDiv) labelDiv.classList.add("selected");
+
+  selectedDongPolygons = dong.polygons;
+  selectedDongLabelEl = labelDiv || null;
 }
 
 /* =========================================================================
@@ -1145,170 +1158,6 @@ function bindGenericModalClose(modalId, closeBtnId) {
 }
 
 /* =========================================================================
-   4.9) 데이터 품질 검사 - 권역 겹침 / 미배정 행정동
-========================================================================= */
-
-/* zone.parts를 Turf 멀티폴리곤 형태로 변환 (WKT 링이 닫혀있지 않으면 닫아줌) */
-function zoneToTurfMultiPolygon(zone) {
-  const coords = zone.parts.map(ring => {
-    const closedRing = ring.map(([lat, lng]) => [lng, lat]); // turf는 [lng, lat] 순서
-    const first = closedRing[0];
-    const last = closedRing[closedRing.length - 1];
-    if (first[0] !== last[0] || first[1] !== last[1]) closedRing.push(first);
-    return [closedRing];
-  });
-  return turf.multiPolygon(coords);
-}
-
-function runOverlapCheck() {
-  const modal = document.getElementById("qcModal");
-  const subtitleEl = document.getElementById("qcSubtitle");
-  const bodyEl = document.getElementById("qcBody");
-
-  subtitleEl.textContent = "권역 겹침 검사 중...";
-  bodyEl.innerHTML = `<div class="loading-text">${zones.length}개 권역을 비교하고 있어요 (잠시 걸릴 수 있어요)</div>`;
-  modal.classList.add("show");
-
-  // 무거운 연산이라 렌더링 한 프레임 이후 실행 (로딩 문구가 먼저 보이도록)
-  setTimeout(() => {
-    const bboxes = zones.map(z => turf.bbox(zoneToTurfMultiPolygon(z)));
-    const AREA_THRESHOLD_SQM = 50; // 이 이하 겹침은 경계선 오차로 보고 무시
-
-    const overlaps = [];
-    for (let i = 0; i < zones.length; i++) {
-      for (let j = i + 1; j < zones.length; j++) {
-        if (!bboxesOverlap(bboxes[i], bboxes[j])) continue; // 바운딩박스로 1차 필터링
-
-        try {
-          const poly1 = zoneToTurfMultiPolygon(zones[i]);
-          const poly2 = zoneToTurfMultiPolygon(zones[j]);
-          const intersection = turf.intersect(poly1, poly2);
-          if (!intersection) continue;
-
-          const areaSqm = turf.area(intersection);
-          if (areaSqm > AREA_THRESHOLD_SQM) {
-            overlaps.push({ a: zones[i], b: zones[j], areaSqm });
-          }
-        } catch (e) {
-          // 일부 폴리곤이 자기교차 등으로 유효하지 않으면 건너뜀
-        }
-      }
-    }
-
-    renderOverlapResults(overlaps);
-  }, 50);
-}
-
-function bboxesOverlap(a, b) {
-  // bbox = [minX, minY, maxX, maxY]
-  return a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
-}
-
-function renderOverlapResults(overlaps) {
-  const subtitleEl = document.getElementById("qcSubtitle");
-  const bodyEl = document.getElementById("qcBody");
-
-  clearOverlapHighlights();
-
-  if (overlaps.length === 0) {
-    subtitleEl.textContent = "검사 완료";
-    bodyEl.innerHTML = `<div class="loading-text">겹치는 권역이 없습니다 ✅</div>`;
-    return;
-  }
-
-  subtitleEl.textContent = `겹치는 권역 쌍 ${overlaps.length}건 발견`;
-  bodyEl.innerHTML = overlaps
-    .map(o => `
-      <div class="qc-row">
-        <b>${o.a.city} · ${o.a.name}</b> ↔ <b>${o.b.city} · ${o.b.name}</b><br/>
-        약 ${Math.round(o.areaSqm).toLocaleString()}㎡ 중첩
-      </div>
-    `)
-    .join("");
-
-  highlightOverlappingZones(overlaps);
-}
-
-let overlapHighlightPolygons = [];
-
-function highlightOverlappingZones(overlaps) {
-  const flaggedIds = new Set();
-  overlaps.forEach(o => { flaggedIds.add(o.a.id); flaggedIds.add(o.b.id); });
-
-  zones.forEach(zone => {
-    if (!flaggedIds.has(zone.id) || !zone.polygons) return;
-    zone.polygons.forEach(p => {
-      const highlight = new kakao.maps.Polygon({
-        path: p.getPath(),
-        strokeWeight: 4,
-        strokeColor: "#ff2d55",
-        strokeOpacity: 1,
-        fillColor: "#ff2d55",
-        fillOpacity: 0.25
-      });
-      highlight.setMap(map);
-      overlapHighlightPolygons.push(highlight);
-    });
-  });
-}
-
-function clearOverlapHighlights() {
-  overlapHighlightPolygons.forEach(p => p.setMap(null));
-  overlapHighlightPolygons = [];
-}
-
-/* 현재 선택된 지역 필터 기준으로, 어느 권역에도 속하지 않는 행정동을 찾음 */
-async function runGapCheck() {
-  const modal = document.getElementById("qcModal");
-  const subtitleEl = document.getElementById("qcSubtitle");
-  const bodyEl = document.getElementById("qcBody");
-
-  if (cityFilter === "__all__") {
-    subtitleEl.textContent = "지역을 먼저 선택해주세요";
-    bodyEl.innerHTML = `<div class="loading-text">사이드바 상단 필터에서 특정 지역을 고른 뒤 다시 실행해주세요.</div>`;
-    modal.classList.add("show");
-    return;
-  }
-
-  if (!ADMDONG_FILE_MAP[cityFilter]) {
-    subtitleEl.textContent = "행정동 데이터 없음";
-    bodyEl.innerHTML = `<div class="loading-text">"${cityFilter}" 지역은 아직 행정동 데이터가 없어요.</div>`;
-    modal.classList.add("show");
-    return;
-  }
-
-  subtitleEl.textContent = "미배정 행정동 확인 중...";
-  bodyEl.innerHTML = `<div class="loading-text">${cityFilter} 지역 행정동을 불러오고 있어요</div>`;
-  modal.classList.add("show");
-
-  try {
-    const dongs = await loadAdmdongForCity(cityFilter);
-    const zonesInCity = zones.filter(z => z.city === cityFilter);
-
-    const unmatched = dongs.filter(dong => {
-      const [cLat, cLng] = getDongCentroid(dong);
-      return !zonesInCity.some(zone => zone.parts.some(part => isPointInRing(cLat, cLng, part)));
-    });
-
-    if (unmatched.length === 0) {
-      subtitleEl.textContent = "검사 완료";
-      bodyEl.innerHTML = `<div class="loading-text">${cityFilter} 지역 모든 행정동이 권역에 배정되어 있습니다 ✅</div>`;
-      return;
-    }
-
-    subtitleEl.textContent = `${cityFilter} 미배정 행정동 ${unmatched.length}개 (중심점 기준 근사 판별)`;
-    bodyEl.innerHTML = `
-      <div class="dong-chip-list">
-        ${unmatched.map(d => `<span class="dong-chip">${shortDongName(d.name)}</span>`).join("")}
-      </div>
-    `;
-  } catch (err) {
-    subtitleEl.textContent = "오류 발생";
-    bodyEl.innerHTML = `<div class="loading-text">행정동 데이터를 불러오지 못했어요.</div>`;
-  }
-}
-
-/* =========================================================================
    5) 필터 적용 (지도 위 표시 여부 + 목록)
 ========================================================================= */
 function applyFilter() {
@@ -1363,6 +1212,9 @@ function bindControls() {
       .map(t => t.trim())
       .filter(t => t.length > 0);
     applyFilter();
+    if (document.getElementById("admdongToggle").checked) {
+      renderAdmdongForCurrentCity();
+    }
   });
 
   document.getElementById("admdongToggle").addEventListener("change", (e) => {
@@ -1373,10 +1225,7 @@ function bindControls() {
     }
   });
 
-  document.getElementById("runOverlapCheckBtn").addEventListener("click", runOverlapCheck);
-  document.getElementById("runGapCheckBtn").addEventListener("click", runGapCheck);
   bindGenericModalClose("zoneDongModal", "zdCloseBtn");
-  bindGenericModalClose("qcModal", "qcCloseBtn");
 
   bindSidebarToggle();
 }
