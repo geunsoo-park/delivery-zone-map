@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>배달권역 지도 - 카카오맵</title>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
 <style>
   :root{
     --bg: #0f1115;
@@ -379,6 +380,10 @@
     border: 1px solid var(--panel-border);
     border-radius: 6px;
     padding: 5px 9px;
+  }
+  .generic-modal .dong-chip-partial {
+    opacity: 0.55;
+    border-style: dashed;
   }
   .generic-modal .close-btn {
     margin-top: 18px; width: 100%;
@@ -929,7 +934,10 @@ function filterDongsBySearch(dongs) {
 
   return dongs.filter(dong => {
     const [cLat, cLng] = getDongCentroid(dong);
-    return matchingZones.some(zone => zone.parts.some(part => isPointInRing(cLat, cLng, part)));
+    return matchingZones.some(zone =>
+      zone.parts.some(part => isPointInRing(cLat, cLng, part)) ||
+      partsIntersect(zone.parts, dong.parts)
+    );
   });
 }
 
@@ -1200,6 +1208,30 @@ function findZonesContainingPoint(lat, lng) {
   return zones.filter(zone => zone.parts.some(part => isPointInRing(lat, lng, part)));
 }
 
+/* =========================================================================
+   폴리곤 겹침(교집합) 판별 (Turf.js) - 행정동이 권역에 "일부라도" 걸치면 true
+========================================================================= */
+function partsToTurfMultiPolygon(parts) {
+  const coords = parts.map(ring => {
+    const flipped = ring.map(([lat, lng]) => [lng, lat]); // turf는 [lng,lat] 순서
+    const first = flipped[0];
+    const last = flipped[flipped.length - 1];
+    if (first[0] !== last[0] || first[1] !== last[1]) {
+      flipped.push(first); // 링이 안 닫혀있으면 닫아줌
+    }
+    return [flipped];
+  });
+  return turf.multiPolygon(coords);
+}
+
+function partsIntersect(partsA, partsB) {
+  try {
+    return turf.booleanIntersects(partsToTurfMultiPolygon(partsA), partsToTurfMultiPolygon(partsB));
+  } catch (err) {
+    return false; // 좌표 이상 등으로 계산 실패 시 안전하게 false
+  }
+}
+
 function showZoneResultForPoint(lat, lng) {
   const matches = findZonesContainingPoint(lat, lng);
   const toast = document.getElementById("zoneResultToast");
@@ -1231,7 +1263,7 @@ async function showZoneDongModal(zone) {
   const bodyEl = document.getElementById("zdBody");
 
   titleEl.textContent = `${zone.city} · ${zone.name}`;
-  subtitleEl.textContent = "포함된 행정동 (중심점 기준 근사 판별)";
+  subtitleEl.textContent = "포함된 행정동 (폴리곤 겹침 기준)";
 
   const metaHtml = zoneMetaHtml(zone);
   bodyEl.innerHTML = `${metaHtml}<div class="loading-text">행정동 데이터 불러오는 중...</div>`;
@@ -1244,21 +1276,27 @@ async function showZoneDongModal(zone) {
 
   try {
     const dongs = await loadAdmdongForCity(zone.city);
-    const matched = dongs.filter(dong => {
-      const [cLat, cLng] = getDongCentroid(dong);
-      return zone.parts.some(part => isPointInRing(cLat, cLng, part));
-    });
+    const matched = dongs
+      .map(dong => {
+        const [cLat, cLng] = getDongCentroid(dong);
+        const centroidInside = zone.parts.some(part => isPointInRing(cLat, cLng, part));
+        const overlaps = centroidInside || partsIntersect(zone.parts, dong.parts);
+        return { dong, full: centroidInside, overlaps };
+      })
+      .filter(m => m.overlaps);
 
     if (matched.length === 0) {
       bodyEl.innerHTML = `${metaHtml}<div class="loading-text">매칭되는 행정동을 찾지 못했어요.</div>`;
       return;
     }
 
-    subtitleEl.textContent = `포함된 행정동 ${matched.length}개 (중심점 기준 근사 판별)`;
+    subtitleEl.textContent = `포함된 행정동 ${matched.length}개 (일부만 걸치는 곳은 옅게 표시)`;
     bodyEl.innerHTML = `
       ${metaHtml}
       <div class="dong-chip-list">
-        ${matched.map(d => `<span class="dong-chip">${shortDongName(d.name)}</span>`).join("")}
+        ${matched.map(m =>
+          `<span class="dong-chip${m.full ? "" : " dong-chip-partial"}" title="${m.full ? "중심점이 권역 안에 있음" : "권역과 일부만 겹침"}">${shortDongName(m.dong.name)}</span>`
+        ).join("")}
       </div>
     `;
   } catch (err) {
