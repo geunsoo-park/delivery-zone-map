@@ -103,6 +103,50 @@
   .field { margin-bottom: 10px; }
   .field:last-child { margin-bottom:0; }
 
+  /* ---------- 대행사 복수선택 드롭다운 ---------- */
+  .multi-select { position: relative; }
+  .multi-select-btn {
+    width:100%;
+    display:flex; align-items:center; justify-content:space-between;
+    background:#1e2230;
+    border:1px solid var(--panel-border);
+    color: var(--text);
+    font-size: 13px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    cursor:pointer;
+    text-align:left;
+  }
+  .multi-select-btn:hover { border-color: #3a4055; }
+  .multi-select.open .multi-select-btn { border-color: var(--accent); }
+  .multi-select-arrow { font-size: 10px; color: var(--text-dim); flex-shrink:0; margin-left:8px; }
+  .multi-select-panel {
+    display:none;
+    position:absolute;
+    top: calc(100% + 4px);
+    left:0; right:0;
+    background:#1e2230;
+    border:1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 6px;
+    max-height: 220px;
+    overflow-y:auto;
+    z-index: 25;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  }
+  .multi-select.open .multi-select-panel { display:block; }
+  .multi-select-option {
+    display:flex; align-items:center; gap:8px;
+    padding: 7px 8px;
+    border-radius: 6px;
+    cursor:pointer;
+    font-size: 13px;
+  }
+  .multi-select-option:hover { background:#262b3d; }
+  .multi-select-option input[type="checkbox"] { accent-color: var(--accent); flex-shrink:0; }
+  .multi-select-option .opt-count { margin-left:auto; font-size:11px; color:var(--text-dim); }
+  .multi-select-divider { height:1px; background:var(--panel-border); margin: 4px 2px; }
+
   .zone-list-wrap { flex:1; overflow-y:auto; padding: 10px 12px 18px; }
   .zone-list { list-style:none; margin:0; padding:0; }
   .zone-item {
@@ -534,9 +578,13 @@
         </select>
       </div>
       <div class="field">
-        <select id="agentSelect">
-          <option value="__all__">전체 대행사</option>
-        </select>
+        <div class="multi-select" id="agentMultiSelect">
+          <button type="button" class="multi-select-btn" id="agentMultiSelectBtn">
+            <span id="agentMultiSelectLabel">전체 대행사</span>
+            <span class="multi-select-arrow">▾</span>
+          </button>
+          <div class="multi-select-panel" id="agentMultiSelectPanel"></div>
+        </div>
       </div>
       <div class="field">
         <input type="text" id="searchInput" placeholder="권역명 검색, 쉼표로 여러개 (예: 강남,역삼)" />
@@ -646,7 +694,7 @@ let infoWindow;
 let zones = [];          // zones.json 파싱 결과
 let currentOpacity = 0.4;
 let cityFilter = "__all__";
-let agentFilter = "__all__";
+let agentFilters = []; // 선택된 대행사 목록 (빈 배열 = 전체)
 let searchTerms = []; // 콤마/공백으로 구분된 복수 검색어
 
 let admdongPolygons = [];      // 현재 지도에 그려진 행정동 경계 Polygon들
@@ -709,7 +757,8 @@ function initMap() {
 
   renderZonePolygons();
   populateCitySelect();
-  populateAgentSelect();
+  populateAgentMultiSelect();
+  bindAgentMultiSelectToggle();
   renderZoneList();
   bindControls();
   bindAddressSearch();
@@ -787,8 +836,8 @@ function populateCitySelect() {
   });
 }
 
-function populateAgentSelect() {
-  const select = document.getElementById("agentSelect");
+function populateAgentMultiSelect() {
+  const panel = document.getElementById("agentMultiSelectPanel");
   const counts = {};
   zones.forEach(z => {
     (z.agents || []).forEach(agent => {
@@ -796,18 +845,75 @@ function populateAgentSelect() {
     });
   });
 
-  Object.keys(counts).sort((a, b) => counts[b] - counts[a]).forEach(agent => {
-    const opt = document.createElement("option");
-    opt.value = agent;
-    opt.textContent = `${agent} (${counts[agent]})`;
-    select.appendChild(opt);
+  const agentNames = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+
+  panel.innerHTML = `
+    <label class="multi-select-option">
+      <input type="checkbox" id="agentOptAll" checked />
+      <span>전체 대행사</span>
+    </label>
+    <div class="multi-select-divider"></div>
+    ${agentNames.map(agent => `
+      <label class="multi-select-option">
+        <input type="checkbox" class="agent-opt-checkbox" value="${agent}" />
+        <span>${agent}</span>
+        <span class="opt-count">${counts[agent]}</span>
+      </label>
+    `).join("")}
+  `;
+
+  document.getElementById("agentOptAll").addEventListener("change", (e) => {
+    if (e.target.checked) {
+      agentFilters = [];
+      panel.querySelectorAll(".agent-opt-checkbox").forEach(cb => { cb.checked = false; });
+      onAgentFilterChange();
+    }
+  });
+
+  panel.querySelectorAll(".agent-opt-checkbox").forEach(cb => {
+    cb.addEventListener("change", () => {
+      const checked = Array.from(panel.querySelectorAll(".agent-opt-checkbox:checked")).map(c => c.value);
+      agentFilters = checked;
+      document.getElementById("agentOptAll").checked = checked.length === 0;
+      onAgentFilterChange();
+    });
+  });
+}
+
+function onAgentFilterChange() {
+  const label = document.getElementById("agentMultiSelectLabel");
+  label.textContent = agentFilters.length === 0
+    ? "전체 대행사"
+    : `${agentFilters.join(", ")} (${agentFilters.length}개 선택)`;
+
+  applyFilter();
+  if (document.getElementById("admdongToggle").checked) {
+    renderAdmdongForCurrentCity();
+  }
+}
+
+function bindAgentMultiSelectToggle() {
+  const wrap = document.getElementById("agentMultiSelect");
+  const btn = document.getElementById("agentMultiSelectBtn");
+
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    wrap.classList.toggle("open");
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!wrap.contains(e.target)) {
+      wrap.classList.remove("open");
+    }
   });
 }
 
 function getFilteredZones() {
   return zones.filter(z => {
     const matchCity = cityFilter === "__all__" || z.city === cityFilter;
-    const matchAgent = agentFilter === "__all__" || (z.agents || []).includes(agentFilter);
+    // 선택된 대행사가 전부 포함되어 있어야 통과 (AND 조건) - 아무것도 선택 안 하면 전체 통과
+    const matchAgent = agentFilters.length === 0 ||
+      agentFilters.every(agent => (z.agents || []).includes(agent));
     const matchSearch = searchTerms.length === 0 ||
       searchTerms.some(term =>
         z.name.toLowerCase().includes(term) || z.city.toLowerCase().includes(term)
@@ -1374,14 +1480,6 @@ function bindControls() {
     applyFilter();
     updateAdmdongAvailability();
     // 지역이 바뀌면 이전 지역의 행정동 경계는 지워줌 (토글은 유지, 다시 켜면 새 지역으로 로드)
-    if (document.getElementById("admdongToggle").checked) {
-      renderAdmdongForCurrentCity();
-    }
-  });
-
-  document.getElementById("agentSelect").addEventListener("change", (e) => {
-    agentFilter = e.target.value;
-    applyFilter();
     if (document.getElementById("admdongToggle").checked) {
       renderAdmdongForCurrentCity();
     }
